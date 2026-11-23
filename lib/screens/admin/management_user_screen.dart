@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../models/user_model.dart';
 import '../../services/user_service.dart';
 import 'user_form_screen.dart';
+import '../../services/auth_service.dart';
+import '../auth/login_screen.dart';
 
 class ManagementUserScreen extends StatefulWidget {
   const ManagementUserScreen({super.key});
@@ -127,7 +129,7 @@ class _ManagementUserScreenState extends State<ManagementUserScreen> {
     }
   }
 
-  void _showLogoutDialog() {
+void _showLogoutDialog() {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -151,10 +153,14 @@ class _ManagementUserScreenState extends State<ManagementUserScreen> {
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
             ),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Berhasil logout (Halaman Login akan disambungkan berikutnya).')),
+              await AuthService().logout();
+              if (!mounted) return;
+              Navigator.pushAndRemoveUntil(
+                context,
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
               );
             },
             child: const Text('Ya, Logout'),
