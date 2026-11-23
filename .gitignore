@@ -41,3 +41,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Abaikan file konfigurasi API Key Brevo
+backend/sismedika_api/helpers/mailer.php
