@@ -138,8 +138,21 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      final msg = e.toString().replaceFirst('Exception: ', '');
+      final isCancelled = msg.contains('dibatalkan') || msg.contains('terlampaui');
+
+      if (isCancelled) {
+        _countdownTimer?.cancel();
+        for (final c in _controllers) {
+          c.clear();
+        }
+      }
+
       setState(() {
-        _errorMessage = e.toString().replaceFirst('Exception: ', '');
+        _errorMessage = msg;
+        if (isCancelled) {
+          _remainingSeconds = 0;
+        }
       });
     } finally {
       if (mounted) {
