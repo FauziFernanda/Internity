@@ -4,8 +4,12 @@ import 'models/user_model.dart';
 import 'screens/admin/management_user_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'services/auth_service.dart';
+import 'screens/intern/absensi_screen.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await initializeDateFormatting('id_ID', null);
   runApp(const SismedikaInternApp());
 }
 
@@ -45,8 +49,12 @@ class _AuthGate extends StatelessWidget {
         }
 
         final user = snapshot.data;
-        if (user != null && user.role == 'Admin') {
-          return const ManagementUserScreen();
+        if (user != null) {
+          if (user.role == 'Admin') {
+            return const ManagementUserScreen();
+          } else if (user.role == 'Intern') {
+            return AbsensiScreen(user: user);
+          }
         }
         return const LoginScreen();
       },

@@ -6,6 +6,7 @@ import '../../services/auth_service.dart';
 import '../../widgets/sismedika_logo.dart';
 import '../admin/management_user_screen.dart';
 import 'login_screen.dart';
+import '../intern/absensi_screen.dart';
 
 class OtpVerificationScreen extends StatefulWidget {
   final String email;
@@ -127,6 +128,8 @@ class _OtpVerificationScreenState extends State<OtpVerificationScreen> {
       Widget destination;
       if (user.role == 'Admin') {
         destination = const ManagementUserScreen();
+      } else if (user.role == 'Intern') {
+        destination = AbsensiScreen(user: user);
       } else {
         destination = _RoleHomePlaceholderScreen(user: user);
       }

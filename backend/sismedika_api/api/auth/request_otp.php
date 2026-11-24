@@ -30,13 +30,14 @@ try {
         jsonResponse(false, 'Email tidak terdaftar dalam sistem. Hubungi Admin untuk akses masuk.', null, 401);
     }
 
-    // Generate 6 digit OTP acak & masa berlaku 5 menit
+    // === BAGIAN POIN 2 (MULAI) ===
+    // Generate 6 digit OTP acak, masa berlaku 5 menit, & reset otp_attempts ke 0
     $otpCode   = (string) random_int(100000, 999999);
     $expiresAt = date('Y-m-d H:i:s', strtotime('+5 minutes'));
 
     $updateStmt = $pdo->prepare("
         UPDATE users 
-        SET otp_code = :otp, otp_expires_at = :expires 
+        SET otp_code = :otp, otp_expires_at = :expires, otp_attempts = 0 
         WHERE id = :id
     ");
     $updateStmt->execute([
@@ -44,6 +45,7 @@ try {
         ':expires' => $expiresAt,
         ':id'      => $user['id'],
     ]);
+    // === BAGIAN POIN 2 (SELESAI) ===
 
     // Kirim OTP ke email user
     $mailResult = sendOtpEmail($user['email'], $user['nama_lengkap'], $otpCode);
@@ -54,10 +56,9 @@ try {
 
     $responseData = [
         'email'      => $user['email'],
-        'expires_in' => 300, // 5 menit (dalam detik)
+        'expires_in' => 300,
     ];
 
-    // Jika mode dev (SMTP_ENABLED = false), sertakan kode OTP agar mudah diuji
     if (!empty($mailResult['dev_mode'])) {
         $responseData['dev_otp'] = $otpCode;
     }
