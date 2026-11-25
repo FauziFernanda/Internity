@@ -2,10 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../models/attendance_model.dart';
+import '../../models/task_model.dart';
 import '../../models/user_model.dart';
 import '../../services/attendance_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/task_service.dart';
 import '../auth/login_screen.dart';
+import 'add_task_screen.dart';
 import 'clock_in_screen.dart';
 import 'izin_cuti_screen.dart';
 
@@ -20,6 +23,7 @@ class AbsensiScreen extends StatefulWidget {
 
 class _AbsensiScreenState extends State<AbsensiScreen> {
   final AttendanceService _attendanceService = AttendanceService();
+  final TaskService _taskService = TaskService();
 
   Timer? _clockTimer;
   DateTime _now = DateTime.now();
@@ -30,7 +34,10 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
   AttendanceRecord? _todayRecord;
   List<AttendanceRecord> _logs = [];
 
-@override
+  bool _isLoadingTasks = false;
+  List<DailyTaskModel> _tasks = [];
+
+  @override
   void initState() {
     super.initState();
     _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -42,9 +49,11 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       setState(() => _now = current);
       if (isNewDay) {
         _loadAttendance();
+        _loadTasks();
       }
     });
     _loadAttendance();
+    _loadTasks();
   }
 
   @override
@@ -52,6 +61,22 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
     _clockTimer?.cancel();
     super.dispose();
   }
+
+  bool get _hasClockedOutToday {
+    if (_todayRecord == null) return false;
+    final todayIso = DateFormat('yyyy-MM-dd').format(_now);
+    final isTodayRecord = _todayRecord!.attendanceDate == todayIso;
+    final hasClockedOut = _todayRecord!.clockOutTime != null &&
+        _todayRecord!.clockOutTime!.trim().isNotEmpty;
+    return isTodayRecord && hasClockedOut;
+  }
+
+  bool get _hasSubmittedTaskToday {
+    final todayIso = DateFormat('yyyy-MM-dd').format(_now);
+    return _tasks.any((t) => t.taskDate == todayIso);
+  }
+
+  bool get _canAddTaskToday => _hasClockedOutToday && !_hasSubmittedTaskToday;
 
   Future<void> _loadAttendance() async {
     setState(() => _isLoading = true);
@@ -72,6 +97,19 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       );
     } finally {
       if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadTasks() async {
+    setState(() => _isLoadingTasks = true);
+    try {
+      final items = await _taskService.getTasks(widget.user.id);
+      if (!mounted) return;
+      setState(() => _tasks = items);
+    } catch (_) {
+      // Abaikan sementara jika gagal memuat
+    } finally {
+      if (mounted) setState(() => _isLoadingTasks = false);
     }
   }
 
@@ -122,8 +160,28 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
     );
   }
 
+  Future<void> _openAddTaskForm() async {
+    if (!_canAddTaskToday) return;
+
+    final saved = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AddTaskScreen(user: widget.user),
+      ),
+    );
+
+    if (!mounted) return;
+    await _loadTasks();
+    if (saved == true) {
+      setState(() {
+        _selectedNavIndex = 1; // Alihkan langsung ke menu List Task
+      });
+    } else {
+      _loadAttendance();
+    }
+  }
+
   Future<void> _handleMainAbsenButton() async {
-    // Jika sudah tercatat Izin / Sakit / Alfa hari ini
     if (_todayRecord != null &&
         (_todayRecord!.status == 'Izin' ||
             _todayRecord!.status == 'Sakit' ||
@@ -140,7 +198,6 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       return;
     }
 
-    // Jika belum Clock In -> Buka halaman Konfirmasi Clock In (Deteksi Geofence)
     if (_todayRecord == null || _todayRecord!.clockInTime == null) {
       final result = await Navigator.push<bool>(
         context,
@@ -154,11 +211,9 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       return;
     }
 
-    // Jika sudah Clock In tapi belum Clock Out
     if (_todayRecord!.clockOutTime == null) {
       final currentMinute = DateFormat('HH:mm').format(_now);
 
-      // Cegah Clock Out sebelum pukul 17:00 WIB dan tampilkan pop-up peringatan
       if (_now.hour < 17) {
         await showDialog<void>(
           context: context,
@@ -224,7 +279,6 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
         return;
       }
 
-      // Jika sudah >= 17:00 WIB -> Tampilkan konfirmasi Clock Out
       final confirm = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -256,11 +310,12 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Clock Out berhasil dicatat!'),
+              content: Text(
+                  'Clock Out berhasil dicatat! Tombol + Tugas Hari Ini kini aktif.'),
               backgroundColor: Color(0xFF16A34A),
             ),
           );
-          _loadAttendance();
+          await _loadAttendance();
         } catch (e) {
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
@@ -446,7 +501,6 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       buttonHint = 'Presensi masuk & pulang hari ini telah lengkap';
     }
 
-    // Warna badge pada kartu ringkasan Jam Masuk
     final Color jamMasukBadgeBg;
     final Color jamMasukBadgeFg;
     if (_todayRecord == null || _todayRecord!.status == 'Alfa') {
@@ -467,9 +521,12 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       backgroundColor: const Color(0xFFF6F8FB),
       body: SafeArea(
         child: _selectedNavIndex == 1
-            ? _buildTaskPlaceholder()
+            ? _buildListTaskTab()
             : RefreshIndicator(
-                onRefresh: _loadAttendance,
+                onRefresh: () async {
+                  await _loadAttendance();
+                  await _loadTasks();
+                },
                 color: const Color(0xFF1A64E8),
                 child: SingleChildScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -649,16 +706,16 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                           ],
                         ),
                       ),
-                      const SizedBox(height: 28),
+                      const SizedBox(height: 26),
 
-                      // Tombol Bulat Utama "Absen" / "Pulang" dengan Efek Halo
+                      // Tombol Bulat Utama "Absen" / "Pulang"
                       GestureDetector(
                         onTap: (_isLoading || _isClockingOut)
                             ? null
                             : _handleMainAbsenButton,
                         child: Container(
-                          width: 210,
-                          height: 210,
+                          width: 205,
+                          height: 205,
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
@@ -721,7 +778,7 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                                           _todayRecord?.status == 'Alfa'
                                               ? Icons.event_busy_rounded
                                               : Icons.fingerprint_rounded,
-                                          size: 56,
+                                          size: 54,
                                           color: Colors.white,
                                         ),
                                         const SizedBox(height: 6),
@@ -740,9 +797,8 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
 
-                      // Keterangan di bawah tombol bulat
                       Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
@@ -762,12 +818,12 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                           ),
                         ],
                       ),
-                      const SizedBox(height: 18),
+                      const SizedBox(height: 16),
 
                       // Tombol "Izin Cuti"
                       SizedBox(
                         width: 240,
-                        height: 48,
+                        height: 46,
                         child: OutlinedButton.icon(
                           onPressed: () async {
                             final submitted = await Navigator.push<bool>(
@@ -799,7 +855,7 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                           ),
                         ),
                       ),
-                      const SizedBox(height: 24),
+                      const SizedBox(height: 22),
 
                       // Kartu Ringkasan Kehadiran Hari Ini
                       Container(
@@ -852,7 +908,6 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                             const SizedBox(height: 14),
                             Row(
                               children: [
-                                // Kotak Jam Masuk
                                 Expanded(
                                   child: _buildSummaryBox(
                                     icon: Icons.login_rounded,
@@ -872,7 +927,6 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                                   ),
                                 ),
                                 const SizedBox(width: 12),
-                                // Kotak Jam Pulang
                                 Expanded(
                                   child: _buildSummaryBox(
                                     icon: Icons.logout_rounded,
@@ -900,6 +954,63 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
                           ],
                         ),
                       ),
+                      const SizedBox(height: 14),
+
+                      // Tombol "+ Tugas Hari Ini" (3 Status: Nonaktif -> Aktif -> Selesai)
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton.icon(
+                          onPressed: _canAddTaskToday ? _openAddTaskForm : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1A64E8),
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: _hasSubmittedTaskToday
+                                ? const Color(0xFFDCFCE7)
+                                : const Color(0xFFE2E8F0),
+                            disabledForegroundColor: _hasSubmittedTaskToday
+                                ? const Color(0xFF16A34A)
+                                : const Color(0xFF94A3B8),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                          ),
+                          icon: Icon(
+                            _hasSubmittedTaskToday
+                                ? Icons.check_circle_rounded
+                                : Icons.add_rounded,
+                            size: 22,
+                          ),
+                          label: Text(
+                            _hasSubmittedTaskToday
+                                ? 'Tugas Hari Ini Selesai'
+                                : '+ Tugas Hari Ini',
+                            style: const TextStyle(
+                              fontSize: 14.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _hasSubmittedTaskToday
+                            ? 'Laporan tugas hari ini telah tersimpan (reset pukul 00:00 WIB)'
+                            : _canAddTaskToday
+                                ? 'Batas pengisian tugas hingga pukul 23:59 WIB hari ini'
+                                : 'Tombol aktif setelah Anda melakukan Clock Out',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: _hasSubmittedTaskToday
+                              ? const Color(0xFF16A34A)
+                              : _canAddTaskToday
+                                  ? const Color(0xFF1A64E8)
+                                  : const Color(0xFF94A3B8),
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -907,7 +1018,12 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedNavIndex,
-        onTap: (index) => setState(() => _selectedNavIndex = index),
+        onTap: (index) {
+          setState(() => _selectedNavIndex = index);
+          if (index == 1) {
+            _loadTasks();
+          }
+        },
         backgroundColor: Colors.white,
         selectedItemColor: const Color(0xFF1A64E8),
         unselectedItemColor: const Color(0xFF64748B),
@@ -992,27 +1108,238 @@ class _AbsensiScreenState extends State<AbsensiScreen> {
     );
   }
 
-  Widget _buildTaskPlaceholder() {
-    return const Center(
-      child: Padding(
-        padding: EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.checklist_rounded, size: 56, color: Color(0xFF1A64E8)),
-            SizedBox(height: 12),
-            Text(
-              'Modul List Task Harian',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+  Widget _buildListTaskTab() {
+    return RefreshIndicator(
+      onRefresh: _loadTasks,
+      color: const Color(0xFF1A64E8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
+            color: Colors.white,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'List Task Harian',
+                      style: TextStyle(
+                        fontSize: 19,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF0F172A),
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'Catatan pekerjaan harian rotasi intern',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+                if (_canAddTaskToday)
+                  ElevatedButton.icon(
+                    onPressed: _openAddTaskForm,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFF1A64E8),
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text(
+                      'Tugas',
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+              ],
             ),
-            SizedBox(height: 6),
-            Text(
-              'Halaman pencatatan aktivitas kerja harian anak magang akan dibuat pada modul berikutnya.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
+          ),
+          Expanded(
+            child: _isLoadingTasks
+                ? const Center(
+                    child: CircularProgressIndicator(color: Color(0xFF1A64E8)),
+                  )
+                : _tasks.isEmpty
+                    ? ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.all(32),
+                        children: const [
+                          SizedBox(height: 60),
+                          Icon(Icons.checklist_rounded,
+                              size: 56, color: Color(0xFFCBD5E1)),
+                          SizedBox(height: 12),
+                          Text(
+                            'Belum Ada Tugas Tercatat',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFF334155),
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Text(
+                            'Tombol "+ Tugas Hari Ini" di halaman Absensi akan aktif setelah Anda melakukan Clock Out.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: Color(0xFF64748B),
+                              height: 1.4,
+                            ),
+                          ),
+                        ],
+                      )
+                    : ListView.separated(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                        itemCount: _tasks.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (_, idx) {
+                          final task = _tasks[idx];
+                          return _buildTaskCard(task);
+                        },
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTaskCard(DailyTaskModel task) {
+    final bool hasDoc =
+        task.attachmentName != null && task.attachmentName!.isNotEmpty;
+    final bool isPdf =
+        (task.attachmentName ?? '').toLowerCase().endsWith('.pdf');
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x080F172A),
+            blurRadius: 14,
+            offset: Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE0E7FF),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.calendar_today_rounded,
+                        size: 12, color: Color(0xFF1A64E8)),
+                    const SizedBox(width: 5),
+                    Text(
+                      task.taskDate,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1A64E8),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Row(
+                children: [
+                  Icon(Icons.check_circle_rounded,
+                      size: 15, color: Color(0xFF16A34A)),
+                  SizedBox(width: 4),
+                  Text(
+                    'Tersimpan',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF16A34A),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            task.title,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+              color: Color(0xFF0F172A),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            task.description,
+            style: const TextStyle(
+              fontSize: 13,
+              color: Color(0xFF475569),
+              height: 1.45,
+            ),
+          ),
+          if (hasDoc) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8FAFC),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE2E8F0)),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    isPdf
+                        ? Icons.picture_as_pdf_rounded
+                        : Icons.description_rounded,
+                    size: 20,
+                    color: isPdf
+                        ? const Color(0xFFDC2626)
+                        : const Color(0xFF1D4ED8),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      task.attachmentName!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF334155),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ],
-        ),
+        ],
       ),
     );
   }
